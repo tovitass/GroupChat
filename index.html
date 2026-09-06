@@ -18,9 +18,18 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; background: var(--bg); color: var(--fg);
-    font-family: 'VCR OSD Mono', 'Courier New', monospace; font-size: 15px; letter-spacing: 0.3px; }
+    font-family: 'VCR OSD Mono', 'Courier New', monospace; font-size: 15px; letter-spacing: 0.3px; overflow: hidden; }
+  
+  #ascii-bg {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    border: none; z-index: -1;
+    pointer-events: none;
+    opacity: 0.2;
+  }
+
   body { display: flex; flex-direction: column; max-width: 640px; margin: 0 auto; height: 100dvh;
-    border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+    border-left: 1px solid var(--line); border-right: 1px solid var(--line); background-color: rgba(0, 0, 0, 0.85); }
   #topbar { padding: 14px 16px 10px 16px; border-bottom: 1px solid var(--line);
     display: flex; justify-content: space-between; align-items: baseline; flex-shrink: 0; }
   #gcname .label { color: var(--dim); }
@@ -57,13 +66,15 @@
   #gate button { background: transparent; border: 1px solid var(--line); color: var(--fg);
     font-family: inherit; font-size: 15px; padding: 10px 24px; cursor: pointer; }
   #gate button:hover { border-color: var(--dim); }
-  #gate .status { color: var(--dim); font-size: 13px; }
+  #gate .status { color: var(--dim); font-size: 13px; font-family: inherit; }
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-thumb { background: var(--line); }
   ::-webkit-scrollbar-track { background: transparent; }
 </style>
 </head>
 <body>
+
+<iframe id="ascii-bg" src="ascii_art.html"></iframe>
 
 <div id="gate">
   <button id="findGcBtn">find a gc</button>
@@ -81,7 +92,7 @@
     <div id="autofill"></div>
     <div id="inputbar">
       <span id="prompt">&gt;</span>
-      <input id="input" autocomplete="off" placeholder="say something" />
+      <input id="input" autocomplete="off" placeholder="say something or use / for a command" />
       <span id="cooldown"></span>
     </div>
   </div>
@@ -90,10 +101,8 @@
 <script type="module">
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
-// ---- fill these in from your Supabase project (Settings → API) ----
 const SUPABASE_URL = 'https://qtakdzwswctsqfyedorw.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_wZfpMp4VeZvXDQJFEn5ZRA_mBnbSRzv';
-// ---------------------------------------------------------------------
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -109,7 +118,7 @@ const autofill = document.getElementById('autofill');
 const cooldownEl = document.getElementById('cooldown');
 const gcnameVal = document.getElementById('gcnameVal');
 
-let me = null;         // auth user
+let me = null;
 let myColor = null;
 let currentRoom = null;
 let currentVote = null;
@@ -119,12 +128,39 @@ let roomChannel = null;
 const SLOW_MODE_MS = 3000;
 let lastSentAt = 0;
 
-// ---------- auth: anonymous, no names, matches the whole premise ----------
+// Noise configuration
+const noiseConfig = {
+    interval: 100,
+    frames: ["▓", "▒", "░"]
+};
+let noiseInterval = null;
+
+function startLoadingAnimation(baseText) {
+    let frameIdx = 0;
+    if (noiseInterval) clearInterval(noiseInterval);
+    noiseInterval = setInterval(() => {
+        const frame = noiseConfig.frames[frameIdx % noiseConfig.frames.length];
+        gateStatus.textContent = `${baseText} ${frame}`;
+        frameIdx++;
+    }, noiseConfig.interval);
+}
+
+function stopLoadingAnimation() {
+    if (noiseInterval) {
+        clearInterval(noiseInterval);
+        noiseInterval = null;
+    }
+}
+
 async function ensureAuth() {
   const { data: { session } } = await supabase.auth.getSession();
   if (session) { me = session.user; return; }
   const { data, error } = await supabase.auth.signInAnonymously();
-  if (error) { gateStatus.textContent = 'auth error: ' + error.message; return; }
+  if (error) { 
+      stopLoadingAnimation();
+      gateStatus.textContent = 'auth error: ' + error.message; 
+      return; 
+  }
   me = data.user;
 }
 
@@ -144,23 +180,24 @@ async function findExistingRoom() {
 
 findGcBtn.addEventListener('click', async () => {
   findGcBtn.disabled = true;
-  gateStatus.textContent = 'connecting...';
+  startLoadingAnimation('connecting...');
   await ensureAuth();
 
   const existing = await findExistingRoom();
   if (existing) {
+    stopLoadingAnimation();
     await enterRoom(existing.roomId, existing.color, existing.name);
     return;
   }
 
-  gateStatus.textContent = 'waiting for 3 more...';
+  startLoadingAnimation('waiting for 3 more...');
   await supabase.rpc('join_queue');
 
-  // poll every few seconds until the matchmaker (scheduled edge function) places us
   const poll = setInterval(async () => {
     const room = await findExistingRoom();
     if (room) {
       clearInterval(poll);
+      stopLoadingAnimation();
       await enterRoom(room.roomId, room.color, room.name);
     }
   }, 4000);
@@ -179,7 +216,6 @@ async function enterRoom(roomId, color, name) {
   subscribeRealtime();
 }
 
-// ---------- message log rendering ----------
 function addMsg(who, text) {
   const row = document.createElement('div');
   row.className = 'msg';
@@ -259,7 +295,6 @@ async function renderVoteBanner() {
   votebanner.append(left, right);
 }
 
-// ---------- realtime ----------
 function subscribeRealtime() {
   messagesChannel = supabase.channel('room-messages-' + currentRoom)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `room_id=eq.${currentRoom}` },
@@ -303,7 +338,6 @@ function subscribeRealtime() {
     .subscribe();
 }
 
-// ---------- slow mode ----------
 function startCooldown() {
   lastSentAt = Date.now();
   input.disabled = true;
@@ -316,7 +350,6 @@ function tick() {
   setTimeout(tick, 100);
 }
 
-// ---------- slash commands + autocomplete ----------
 const COMMANDS_BASE = [
   { cmd: '/vote eject <color>', desc: 'start a vote to remove a member' },
   { cmd: '/vote dissolve', desc: 'start a vote to end the gc' },
@@ -419,7 +452,6 @@ input.addEventListener('keydown', async e => {
   startCooldown();
 });
 
-// auto-resume a session on reload
 (async () => {
   await ensureAuth();
   const existing = await findExistingRoom();
