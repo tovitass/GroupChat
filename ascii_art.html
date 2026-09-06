@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ASCII Art - Responsive Height</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Courier New', monospace;
+  background: #000;
+  overflow: hidden;
+  /* Use viewport units to ensure it fills the screen on all browsers */
+  width: 100vw;
+  height: 100vh;
+}
+canvas {
+  display: block;
+  background: #000;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<script>
+/**
+ * ASCII Art Animation - Phosphor Green Terminal Mode
+ * Fixed to fill the entire window height dynamically.
+ */
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+function resizeCanvas() {
+  // Use the actual window dimensions
+  canvas.width = window.innerWidth * window.devicePixelRatio;
+  canvas.height = window.innerHeight * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// --- STATE ---
+let frame = 0;
+const totalFrames = 120;
+let animationId;
+
+// --- FIXED SETTINGS ---
+const palette = ['#000000', '#0f380f', '#306230', '#8bac0f', '#9bbc0f', '#ccff00']; 
+
+// --- RANDOMIZED SETTINGS ON LOAD ---
+const algorithms = ['lissajous', 'rose', 'interference', 'perlin', 'spiral'];
+const randomAlgorithm = algorithms[Math.floor(Math.random() * algorithms.length)];
+const randomComplexity = 2 + Math.random() * 8; 
+const randomDensity = 40 + Math.floor(Math.random() * 30); 
+const randomSpeed = 0.5 + Math.random() * 1.5;
+
+function getColor(value) {
+  const index = Math.floor(value * (palette.length - 1));
+  return palette[Math.max(0, Math.min(palette.length - 1, index))];
+}
+
+// --- MATH & ALGORITHMS ---
+
+function getLissajous(x, y, t, comp) {
+    const scale = 0.05 * comp;
+    const v1 = Math.sin(x * scale + t * Math.PI * 2);
+    const v2 = Math.cos(y * scale + t * Math.PI * 4); 
+    return (v1 + v2 + 2) / 4;
+}
+
+function getRose(x, y, t, comp) {
+    const dx = x - 0.5;
+    const dy = y - 0.5;
+    const r = Math.sqrt(dx*dx + dy*dy) * 2;
+    const theta = Math.atan2(dy, dx);
+    const k = comp + Math.sin(t * Math.PI * 2) * 2;
+    const shape = Math.abs(Math.cos(k * theta));
+    const ring = Math.sin(r * 10 - t * Math.PI * 4);
+    return (shape * ring + 1) / 2;
+}
+
+function getInterference(x, y, t, comp) {
+    const cx = 0.5;
+    const cy = 0.5;
+    const dist = Math.sqrt((x-cx)**2 + (y-cy)**2);
+    const w1 = Math.sin(dist * (10 * comp) - t * Math.PI * 4);
+    const w2 = Math.sin(x * 10 + t * Math.PI * 2);
+    const w3 = Math.cos(y * 8 - t * Math.PI * 2);
+    return (w1 + w2 + w3 + 3) / 6;
+}
+
+function getTerrain(x, y, t, comp) {
+    let v = 0;
+    let freq = comp;
+    v += Math.sin(x * freq + t * Math.PI*2) * 0.5;
+    v += Math.cos(y * freq - t * Math.PI*2) * 0.5;
+    v += Math.sin((x+y) * freq * 2) * 0.25;
+    return (v + 1.25) / 2.5; 
+}
+
+function getSpiral(x, y, t, comp) {
+    const dx = x - 0.5;
+    const dy = y - 0.5;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const angle = Math.atan2(dy, dx);
+    const spiral = Math.sin(dist * (10 + comp) + angle * 4 + t * Math.PI * 2);
+    return (spiral + 1) / 2;
+}
+
+function getValue(u, v, t) {
+    switch(randomAlgorithm) {
+        case 'lissajous': return getLissajous(u*20, v*20, t, randomComplexity);
+        case 'rose': return getRose(u, v, t, randomComplexity);
+        case 'interference': return getInterference(u, v, t, randomComplexity);
+        case 'perlin': return getTerrain(u, v, t, randomComplexity);
+        case 'spiral': return getSpiral(u, v, t, randomComplexity);
+        default: return 0.5;
+    }
+}
+
+// --- ASCII RENDER ---
+function renderAscii(t) {
+    const displayWidth = canvas.width / window.devicePixelRatio;
+    const displayHeight = canvas.height / window.devicePixelRatio;
+    
+    // Determine cell size based on width density
+    const resX = randomDensity;
+    const cellSize = displayWidth / resX;
+    
+    // CALCULATE ROWS BASED ON ACTUAL HEIGHT
+    const resY = Math.ceil(displayHeight / cellSize);
+    
+    const chars = " .'`^,:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
+    
+    ctx.font = `${Math.ceil(cellSize)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    // Maintain aspect ratio for the math by calculating an aspect factor
+    const aspect = displayWidth / displayHeight;
+
+    for (let y = 0; y < resY; y++) {
+        for (let x = 0; x < resX; x++) {
+            const u = x / resX;
+            // Adjust v so the math doesn't stretch 
+            const v = (y / resY) * (1 / aspect); 
+            
+            const val = getValue(u, v, t);
+            const color = getColor(val);
+            const charIdx = Math.floor(val * (chars.length - 1));
+            const char = chars[Math.max(0, Math.min(chars.length-1, charIdx))];
+            
+            ctx.fillStyle = color;
+            ctx.fillText(char, x * cellSize + cellSize/2, y * cellSize + cellSize/2);
+        }
+    }
+}
+
+// --- MAIN LOOP ---
+function animate() {
+    const t = (frame % totalFrames) / totalFrames;
+    const dw = canvas.width / window.devicePixelRatio;
+    const dh = canvas.height / window.devicePixelRatio;
+    
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, dw, dh);
+    
+    renderAscii(t);
+    
+    frame += randomSpeed;
+    animationId = requestAnimationFrame(animate);
+}
+
+animate();
+</script>
+</body>
+</html>
